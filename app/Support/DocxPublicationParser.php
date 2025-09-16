@@ -16,6 +16,7 @@ class DocxPublicationParser
     {
         $title   = null;
         $content = '';
+        $abstract = null;
 
         $text = '';
 
@@ -38,6 +39,35 @@ class DocxPublicationParser
         // 3) Normalizar saltos y líneas
         $text = self::normalizeNewlines($text);
         $lines = array_values(array_filter(array_map('trim', explode("\n", $text)), fn($l) => $l !== ''));
+
+        // Buscar abstract
+        $abstractIdx = null;
+        foreach ($lines as $i => $line) {
+            if (preg_match('/^(abstract|resumen)[:]?/i', $line)) {
+                $abstractIdx = $i;
+                break;
+            }
+        }
+        if ($abstractIdx !== null) {
+            // Si la línea es solo "Abstract:" o "Resumen:", tomar las siguientes líneas hasta el próximo salto doble o el final
+            $abstractLine = $lines[$abstractIdx];
+            $after = array_slice($lines, $abstractIdx + 1);
+            // Si la línea tiene texto después de "Abstract:" o "Resumen:", tomar ese texto
+            if (preg_match('/^(abstract|resumen)[:]?\s*(.*)$/i', $abstractLine, $m)) {
+                $abstract = $m[2] !== '' ? $m[2] : null;
+            }
+            // Si no hay texto, tomar las siguientes líneas hasta encontrar una línea vacía o el final
+            if ($abstract === null && !empty($after)) {
+                $abstractLines = [];
+                foreach ($after as $l) {
+                    if ($l === '') break;
+                    $abstractLines[] = $l;
+                }
+                if (!empty($abstractLines)) {
+                    $abstract = implode("\n", $abstractLines);
+                }
+            }
+        }
 
         // 4) Título: intenta properties (docProps/core.xml), si no, primera línea no vacía
         $coreTitle = self::readCoreTitle($absolutePath);
@@ -62,6 +92,7 @@ class DocxPublicationParser
         return [
             'title'   => $title,
             'content' => $content,
+            'abstract' => $abstract,
         ];
     }
 

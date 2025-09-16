@@ -82,6 +82,11 @@ class PublicationResource extends Resource
                                     if (!empty($data['title'])) {
                                         $set('title', $data['title']);
                                     }
+
+                                    if(!empty($data['abstract'])) {
+                                        $set('abstract', $data['abstract']);
+                                    }
+
                                     if (!empty($data['content'])) {
                                         // Si tu 'content' es Textarea, puedes dejar texto plano.
                                         // Si quisieras HTML: $set('content', DocxPublicationParser::textToHtml($data['content']));
