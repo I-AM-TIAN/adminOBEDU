@@ -44,48 +44,66 @@ class DocxPublicationParser
         $abstractIdx = null;
         foreach ($lines as $i => $line) {
             if (preg_match('/^(abstract|resumen)[:]?/i', $line)) {
-                $abstractIdx = $i;
-                break;
+            $abstractIdx = $i;
+            break;
             }
         }
         if ($abstractIdx !== null) {
             // Si la línea es solo "Abstract:" o "Resumen:", tomar las siguientes líneas hasta el próximo salto doble o el final
             $abstractLine = $lines[$abstractIdx];
             $after = array_slice($lines, $abstractIdx + 1);
+
             // Si la línea tiene texto después de "Abstract:" o "Resumen:", tomar ese texto
             if (preg_match('/^(abstract|resumen)[:]?\s*(.*)$/i', $abstractLine, $m)) {
-                $abstract = $m[2] !== '' ? $m[2] : null;
+            $abstract = $m[2] !== '' ? $m[2] : null;
             }
+
             // Si no hay texto, tomar las siguientes líneas hasta encontrar una línea vacía o el final
             if ($abstract === null && !empty($after)) {
-                $abstractLines = [];
-                foreach ($after as $l) {
-                    if ($l === '') break;
-                    $abstractLines[] = $l;
-                }
-                if (!empty($abstractLines)) {
-                    $abstract = implode("\n", $abstractLines);
-                }
+            $abstractLines = [];
+            foreach ($after as $l) {
+                // Si encontramos una línea que parece ser el inicio de otra sección (por ejemplo, "Introducción", "Introduction", etc.), detenemos el abstract
+                if (preg_match('/^(introducción|introduction|contenido|content)[:]?/i', $l)) break;
+                $abstractLines[] = $l;
             }
+            if (!empty($abstractLines)) {
+                $abstract = implode("\n", $abstractLines);
+            }
+            }
+
+            // Elimina las líneas del abstract de $lines para que no se incluyan en el content
+            array_splice($lines, $abstractIdx, ($abstract === null ? 1 : (count($abstractLines ?? []) + 1)));
         }
 
-        // 4) Título: intenta properties (docProps/core.xml), si no, primera línea no vacía
+        // 4) Título: intenta properties (docProps/core.xml), si no, primera línea no vacía eliminando la palabra "title" y los ":" que siguen
         $coreTitle = self::readCoreTitle($absolutePath);
-        if ($coreTitle) {
+        if ($coreTitle && stripos($coreTitle, 'title') === false) {
             $title = $coreTitle;
         } else {
-            $title = $lines[0] ?? null;
+            // Busca la primera línea no vacía y elimina la palabra "title" y los ":" que siguen
+            $title = null;
+            foreach ($lines as $line) {
+            // Elimina "title" (case-insensitive) y los ":" que siguen inmediatamente después
+            $cleanLine = preg_replace('/\btitle\b\s*:*/i', '', $line);
+            $cleanLine = trim($cleanLine);
+            if ($cleanLine !== '') {
+                $title = $cleanLine;
+                break;
+            }
+            }
         }
 
-        // 5) Contenido: todo lo que sigue al título (si coincide); si no, todo el texto
+        // 5) Contenido: todo lo que sigue luego de finalizado el abstract, es decir, todo lo que está luego del título "content"
+        $content = '';
         if (!empty($lines)) {
-            $contentLines = $lines;
-            if ($title) {
-                $idx = array_search($title, $lines, true);
-                if ($idx !== false) {
-                    $contentLines = array_slice($lines, $idx + 1);
-                }
+            $contentStartIdx = 0;
+            foreach ($lines as $i => $line) {
+            if (preg_match('/^(contenido|content)[:]?$/i', trim($line))) {
+                $contentStartIdx = $i + 1;
+                break;
             }
+            }
+            $contentLines = array_slice($lines, $contentStartIdx);
             $content = implode("\n\n", $contentLines);
         }
 

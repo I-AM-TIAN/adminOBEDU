@@ -12,8 +12,6 @@ class Publication extends Model
         'content',
         'publication_date',
         'author_id',
-        'publication_type_id',
-        // 'image_id', // opcional: quitar si ya no lo usas
     ];
 
     public function author()
