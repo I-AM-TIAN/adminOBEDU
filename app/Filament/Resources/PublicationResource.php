@@ -12,9 +12,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Notifications\Notification;
-use Illuminate\Support\Facades\Storage;
-use Livewire\Features\SupportFileUploads\TemporaryUploadedFile; // 👈 IMPORTANTE
-use Livewire\TemporaryUploadedFile;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile; // Livewire v3
 
 class PublicationResource extends Resource
 {
@@ -28,92 +26,49 @@ class PublicationResource extends Resource
             ->schema([
                 // ---------- IMPORTAR DESDE WORD (.docx) ----------
                 Forms\Components\Section::make('Importar desde Word')
-                    ->description('Sube un .docx con las etiquetas Title, Abstract y Content para autocompletar los campos.')
+                    ->description('Sube un .docx para autocompletar SOLO el Título y el Contenido.')
                     ->schema([
                         Forms\Components\FileUpload::make('docx_upload')
                             ->label('Archivo .docx')
-                            ->disk('public') // (lo usaremos para el guardado opcional)
-                            ->directory('imports/publications')
+                            // NO definimos ->disk() ni ->directory() para que Livewire mantenga archivo temporal
                             ->acceptedFileTypes([
                                 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                             ])
-                            ->downloadable()
-                            ->openable()
                             ->preserveFilenames()
                             ->dehydrated(false)   // no guardar este campo en la BD
-                            ->reactive()          // dispara callbacks al cambiar
-                            -> afterStateUpdated(function ($state, Set $set) {
-                                if (!$state) {
-                                    \Filament\Notifications\Notification::make()
+                            ->multiple()          // siempre array => evitamos el foreach error interno de Filament
+                            ->maxFiles(1)
+                            ->reactive()
+                            ->afterStateUpdated(function ($state, Set $set) {
+                                // $state será array|null por ->multiple()
+                                /** @var TemporaryUploadedFile|mixed|null $raw */
+                                $raw = (is_array($state) && count($state)) ? end($state) : null;
+                                if (!$raw) {
+                                    Notification::make()
                                         ->title('No se recibió el archivo')
                                         ->danger()
                                         ->send();
                                     return;
                                 }
 
-                                // $state puede ser string (token temporal o ruta relativa) o array (si múltiple)
-                                $raw = is_array($state) ? ($state[0] ?? null) : $state;
-                                if (!$raw) {
-                                    \Filament\Notifications\Notification::make()
-                                        ->title('Ruta vacía')
-                                        ->danger()
-                                        ->send();
-                                    return;
-                                }
-
+                                // Resolver ruta absoluta del archivo temporal (Livewire v3)
                                 $filePath = null;
-
                                 try {
-                                    // --- 1) Livewire v3 ---
-                                    if (class_exists(\Livewire\Features\SupportFileUploads\TemporaryUploadedFile::class)) {
-                                        $tuf = null;
-
-                                        // Si $raw es token temporal (empieza con "livewire-file:"), lo convertimos:
-                                        if (is_string($raw) && str_starts_with($raw, 'livewire-file:')) {
-                                            $tuf = \Livewire\Features\SupportFileUploads\TemporaryUploadedFile::unserializeFromLivewireRequest($raw);
-                                        }
-
-                                        // Si por alguna razón ya es instancia:
-                                        if (!$tuf && $raw instanceof \Livewire\Features\SupportFileUploads\TemporaryUploadedFile) {
-                                            $tuf = $raw;
-                                        }
-
-                                        if ($tuf) {
-                                            // getRealPath puede ser null en Windows: usamos también getPathname()
-                                            $filePath = $tuf->getRealPath() ?: $tuf->getPathname();
-                                        }
-                                    }
-
-                                    // --- 2) Livewire v2 (proyectos más antiguos) ---
-                                    if (!$filePath && class_exists(\Livewire\TemporaryUploadedFile::class)) {
-                                        // en v2 el método es createFromLivewire
-                                        $tuf = \Livewire\TemporaryUploadedFile::createFromLivewire($raw);
-                                        if ($tuf) {
-                                            $filePath = $tuf->getRealPath() ?: $tuf->getPathname();
-                                        }
+                                    if ($raw instanceof TemporaryUploadedFile) {
+                                        $filePath = $raw->getRealPath() ?: $raw->getPathname();
+                                    } elseif (is_string($raw) && str_starts_with($raw, 'livewire-file:')) {
+                                        // Si por alguna razón llega token, lo deserializamos
+                                        $tuf = TemporaryUploadedFile::unserializeFromLivewireRequest($raw);
+                                        $filePath = $tuf?->getRealPath() ?: $tuf?->getPathname();
                                     }
                                 } catch (\Throwable $e) {
-                                    // seguimos con fallbacks abajo
+                                    // seguimos con filePath = null
                                 }
 
-                                // --- 3) Fallback: quizá $raw ya es ruta persistida en el disk 'public' ---
-                                if ((!$filePath || !file_exists($filePath)) && is_string($raw) && str_contains($raw, '/')) {
-                                    $abs = \Illuminate\Support\Facades\Storage::disk('public')->path($raw);
-                                    if (file_exists($abs)) {
-                                        $filePath = $abs;
-                                    }
-                                }
-
-                                // --- 4) Último intento: si $raw parece ruta del sistema (ej. C:\Users\...\Temp\phpABC.tmp) ---
-                                if ((!$filePath || !file_exists($filePath)) && is_string($raw) && file_exists($raw)) {
-                                    $filePath = $raw;
-                                }
-
-                                // Si aún no lo tenemos, avisamos qué valor llegó
                                 if (!$filePath || !file_exists($filePath)) {
-                                    \Filament\Notifications\Notification::make()
-                                        ->title('No pude acceder al archivo')
-                                        ->body("Valor recibido: " . (is_string($raw) ? $raw : '[obj]'))
+                                    Notification::make()
+                                        ->title('No pude acceder al archivo temporal')
+                                        ->body(is_string($raw) ? $raw : 'Archivo no reconocido')
                                         ->danger()
                                         ->send();
                                     return;
@@ -121,37 +76,38 @@ class PublicationResource extends Resource
 
                                 // --- Parsear el DOCX ---
                                 try {
-                                    $data = \App\Support\DocxPublicationParser::parse($filePath);
+                                    $data = DocxPublicationParser::parse($filePath);
 
-                                    $set('title',    $data['title']    ?? '');
-                                    $set('abstract', $data['abstract'] ?? '');
-                                    $set('content',  $data['content']  ?? '');
-
-                                    // (Opcional) moverlo ya al disk 'public' para que quede persistente y actualizar el estado
-                                    if (
-                                        class_exists(\Livewire\Features\SupportFileUploads\TemporaryUploadedFile::class)
-                                        && isset($tuf) && $tuf instanceof \Livewire\Features\SupportFileUploads\TemporaryUploadedFile
-                                    ) {
-                                        $stored = $tuf->storeAs('imports/publications', $tuf->getClientOriginalName(), 'public');
-                                        if ($stored) {
-                                            $set('docx_upload', $stored);
-                                        }
+                                    // SOLO llenamos title y content
+                                    if (!empty($data['title'])) {
+                                        $set('title', $data['title']);
+                                    }
+                                    if (!empty($data['content'])) {
+                                        // Si tu 'content' es Textarea, puedes dejar texto plano.
+                                        // Si quisieras HTML: $set('content', DocxPublicationParser::textToHtml($data['content']));
+                                        $set('content', $data['content']);
                                     }
 
-                                    \Filament\Notifications\Notification::make()
+                                    Notification::make()
                                         ->title('Contenido importado')
-                                        ->body('Se completaron Título, Resumen y Contenido desde el Word.')
+                                        ->body('Se completaron Título y Contenido desde el Word.')
                                         ->success()
                                         ->send();
+
+                                    // ⚠️ Importante:
+                                    // No reasignamos 'docx_upload' a una cadena/ruta aquí.
+                                    // Si quieres persistir el .docx, hazlo en onSave (o en un Action),
+                                    // usando $raw->storeAs(...) y guardando la ruta en otro campo propio.
+
                                 } catch (\Throwable $e) {
-                                    \Filament\Notifications\Notification::make()
+                                    Notification::make()
                                         ->title('Error al leer el .docx')
                                         ->body($e->getMessage())
                                         ->danger()
                                         ->send();
                                 }
                             })
-                            ->helperText('Al subir el archivo se llenarán automáticamente Título, Resumen y Contenido.')
+                            ->helperText('Al subir el archivo se llenarán automáticamente Título y Contenido.')
                             ->columnSpanFull(),
                     ])
                     ->collapsible()
@@ -168,8 +124,7 @@ class PublicationResource extends Resource
                         Forms\Components\Textarea::make('abstract')
                             ->label('Resumen')
                             ->rows(4)
-                            ->required()
-                            ->columnSpanFull(),
+                            ->columnSpanFull(), // déjalo opcional; si lo quieres obligatorio agrega ->required()
 
                         Forms\Components\Textarea::make('content')
                             ->label('Contenido')
@@ -192,7 +147,7 @@ class PublicationResource extends Resource
                         // Relación: public function publicationType() { return $this->belongsTo(PublicationType::class, 'publication_type_id'); }
                         Forms\Components\Select::make('publication_type_id')
                             ->label('Tipo de publicación')
-                            ->relationship('publicationType', 'name') // nombre EXACTO del método
+                            ->relationship('publicationType', 'name') // nombre EXACTO del método de relación
                             ->searchable()
                             ->preload()
                             ->required(),
