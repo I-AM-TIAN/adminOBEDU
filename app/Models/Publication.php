@@ -6,7 +6,15 @@ use Illuminate\Database\Eloquent\Model;
 
 class Publication extends Model
 {
-    protected $fillable = ['title', 'abstract', 'content', 'publication_date', 'author_id', 'publication_type_id'];
+    protected $fillable = [
+        'title',
+        'abstract',
+        'content',
+        'publication_date',
+        'author_id',
+        'publication_type_id',
+        // 'image_id', // opcional: quitar si ya no lo usas
+    ];
 
     public function author()
     {
@@ -16,5 +24,10 @@ class Publication extends Model
     public function publicationType()
     {
         return $this->belongsTo(PublicationType::class);
+    }
+
+    public function images()
+    {
+        return $this->hasMany(\App\Models\Image::class);
     }
 }
